@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+	<title>OAuth Result</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 2rem; }
+		pre { background: #f5f5f5; padding: 1rem; overflow-x: auto; }
+		.container { max-width: 900px; margin: auto; }
+		.small { color:#666; }
+		a { text-decoration: none; }
+	</style>
+</head>
+<body>
+<div class="container">
+	<h1>Token Endpoint Response</h1>
+	<p class="small">Below is the raw HTTP response body returned by the OAuth token endpoint.</p>
+	<pre th:text="${rawResponse}">No response</pre>
+
+	<div th:if="${accessToken}">
+		<h2>Access Token (parsed)</h2>
+		<pre th:text="${accessToken}"></pre>
+	</div>
+	<div th:if="${idToken}">
+		<h2>ID Token parsed claims</h2>
+		<pre th:text="${idToken}"></pre>
+	</div>
+	<div th:if="${oauthError}">
+		<h2>OAuth Error</h2>
+		<pre th:text="${oauthError}"></pre>
+	</div>
+
+	<p><a href="/">&#8592; Back</a></p>
+</div>
+</body>
+</html>

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+	<title>OAuth Sample Client</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 2rem; }
+		.container { max-width: 800px; margin: auto; }
+		label { display: block; margin-top: 1rem; font-weight: bold; }
+		input[type=text] { width: 100%; padding: .5rem; }
+		button { margin-top: 1.5rem; padding: .6rem 1rem; }
+		.muted { color: #666; font-size: .9rem; }
+		.checkbox { display:flex; align-items:center; gap:.5rem; margin-top: 1rem; }
+	</style>
+</head>
+<body>
+<div class="container">
+	<h1>OAuth Sample Client</h1>
+	<p class="muted">This simple client performs Authorization Code flow using Nimbus libs. The redirect URL is:
+		<strong th:text="${redirectUri}"></strong></p>
+
+	<form th:action="@{/start}" method="post" th:object="${form}">
+		<label for="authorizationEndpoint">Authorization endpoint URL</label>
+		<input id="authorizationEndpoint" value="https://localhost:2443/oauth2-as/oauth2-authz"
+               name="authorizationEndpoint" type="text" placeholder="https://as.example.com/oauth2/authorize" required/>
+
+		<label for="tokenEndpoint">Token endpoint URL</label>
+		<input id="tokenEndpoint" value="https://localhost:2443/oauth2/token"
+               name="tokenEndpoint" type="text" placeholder="https://as.example.com/oauth2/token" required/>
+
+		<label for="clientId">Client ID</label>
+		<input id="clientId" value=""
+               name="clientId" type="text" placeholder="public-client-id" required/>
+
+		<label for="scope">Scope (optional, space separated)</label>
+		<input id="scope" name="scope" type="text" value="openid profile email"/>
+
+        <label for="scope">Additional OAuth request param1 (syntax: name=value)</label>
+        <input id="extraParam1" name="extraParam1" type="text"/>
+
+		<div class="checkbox">
+			<input id="usePkce" name="usePkce" type="checkbox"/>
+			<label for="usePkce" style="margin:0">Use PKCE (S256)</label>
+		</div>
+
+		<button type="submit">Authenticate</button>
+	</form>
+</div>
+</body>
+</html>
