@@ -1,13 +1,8 @@
 package io.imunity.oauthsampleclient.web;
 
-
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Objects;
-
-import ch.qos.logback.classic.Logger;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -17,6 +12,8 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectWriter;
 import com.nimbusds.jwt.JWT;
 import com.nimbusds.oauth2.sdk.AccessTokenResponse;
 import com.nimbusds.oauth2.sdk.AuthorizationCode;
@@ -25,17 +22,20 @@ import com.nimbusds.oauth2.sdk.AuthorizationRequest;
 import com.nimbusds.oauth2.sdk.ResponseType;
 import com.nimbusds.oauth2.sdk.Scope;
 import com.nimbusds.oauth2.sdk.TokenResponse;
-import com.nimbusds.oauth2.sdk.id.State;
+import com.nimbusds.oauth2.sdk.auth.ClientSecretBasic;
+import com.nimbusds.oauth2.sdk.auth.Secret;
 import com.nimbusds.oauth2.sdk.http.HTTPRequest;
 import com.nimbusds.oauth2.sdk.http.HTTPResponse;
 import com.nimbusds.oauth2.sdk.id.ClientID;
+import com.nimbusds.oauth2.sdk.id.State;
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod;
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier;
 import com.nimbusds.oauth2.sdk.token.Tokens;
 import com.nimbusds.openid.connect.sdk.OIDCTokenResponse;
-import com.nimbusds.openid.connect.sdk.token.OIDCTokens;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.ObjectWriter;
+
+import ch.qos.logback.classic.Logger;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 
 @Controller
 public class OAuthController
@@ -43,10 +43,6 @@ public class OAuthController
 	private static final Logger log = (Logger) org.slf4j.LoggerFactory.getLogger(OAuthController.class);
 	private static final ObjectWriter PRETTY = new ObjectMapper().writerWithDefaultPrettyPrinter();
 	public static final String SESSION_STATE = "oauth_state";
-	public static final String SESSION_CODE_VERIFIER = "oauth_code_verifier";
-	public static final String SESSION_TOKEN_ENDPOINT = "oauth_token_endpoint";
-	public static final String SESSION_CLIENT_ID = "oauth_client_id";
-	public static final String SESSION_USE_PKCE = "oauth_use_pkce";
 
 	@GetMapping("/")
 	public String index(HttpServletRequest request, Model model)
@@ -70,14 +66,16 @@ public class OAuthController
 		}
 
 		// Store context in session
-		session.setAttribute(SESSION_STATE, state.getValue());
-		session.setAttribute(SESSION_TOKEN_ENDPOINT, form.tokenEndpoint());
-		session.setAttribute(SESSION_CLIENT_ID, form.clientId());
-		session.setAttribute(SESSION_USE_PKCE, form.usePkce());
-		if (codeVerifier != null)
-		{
-			session.setAttribute(SESSION_CODE_VERIFIER, codeVerifier.getValue());
-		}
+		OAuthState oauthState = new OAuthState(
+				state.getValue(),
+				codeVerifier != null ? codeVerifier.getValue() : null,
+				form.tokenEndpoint(),
+				form.clientId(),
+				form.getClientCred(),
+				form.usePkce(),
+				form.isUseAuthn()
+				);
+		session.setAttribute(SESSION_STATE, oauthState);
 
 		URI authzEndpoint = new URI(form.authorizationEndpoint());
 		AuthorizationRequest.Builder builder = new AuthorizationRequest.Builder(new ResponseType("code"),
@@ -111,10 +109,10 @@ public class OAuthController
 			@RequestParam(name = "error_description", required = false) String errorDescription,
 			HttpServletRequest request, HttpSession session, Model model) throws Exception
 	{
-		String expectedState = (String) session.getAttribute(SESSION_STATE);
-		if (!StringUtils.hasText(expectedState) || !Objects.equals(expectedState, stateParam))
+		OAuthState oauthState = (OAuthState) session.getAttribute(SESSION_STATE);
+		if (!StringUtils.hasText(oauthState.state) || !Objects.equals(oauthState.state, stateParam))
 		{
-			model.addAttribute("rawResponse", "State mismatch or missing session. Expected: " + expectedState
+			model.addAttribute("rawResponse", "State mismatch or missing session. Expected: " + oauthState.state
 					+ ", got: " + stateParam);
 			return "result";
 		}
@@ -125,26 +123,34 @@ public class OAuthController
 			return "result";
 		}
 
-		String tokenEndpoint = (String) session.getAttribute(SESSION_TOKEN_ENDPOINT);
-		String clientId = (String) session.getAttribute(SESSION_CLIENT_ID);
-		boolean usePkce = Boolean.TRUE.equals(session.getAttribute(SESSION_USE_PKCE));
-		String verifier = (String) session.getAttribute(SESSION_CODE_VERIFIER);
-
 		String redirectUri = computeRedirectUri(request);
 
 		AuthorizationCodeGrant grant;
-		if (usePkce)
+		if (oauthState.usePKCE)
 		{
 			grant = new AuthorizationCodeGrant(new AuthorizationCode(code), new URI(redirectUri),
-					new CodeVerifier(verifier));
+					new CodeVerifier(oauthState.codeVerifier));
 		} else
 		{
 			grant = new AuthorizationCodeGrant(new AuthorizationCode(code), new URI(redirectUri));
 		}
-
-		com.nimbusds.oauth2.sdk.TokenRequest tokenRequest = new com.nimbusds.oauth2.sdk.TokenRequest(
-				new URI(tokenEndpoint), new ClientID(clientId), grant);
-
+		com.nimbusds.oauth2.sdk.TokenRequest tokenRequest;
+		if (oauthState.useAuthn)
+		{
+			tokenRequest = new com.nimbusds.oauth2.sdk.TokenRequest(
+					new URI(oauthState.tokenEndpoint),
+					new ClientSecretBasic(new ClientID(oauthState.clientId),
+							new Secret(oauthState.clientCred)),
+					grant,
+					null);
+		} else
+		{
+			tokenRequest = new com.nimbusds.oauth2.sdk.TokenRequest(
+					new URI(oauthState.tokenEndpoint),
+					new ClientID(oauthState.clientId),
+					grant,
+					null);
+		}
 		HTTPRequest httpRequest = tokenRequest.toHTTPRequest();
 		HTTPResponse httpResponse;
 		try
@@ -280,13 +286,26 @@ public class OAuthController
 		}
 	}
 
+	private record OAuthState(
+			String state,
+			String codeVerifier,
+			String tokenEndpoint,
+			String clientId,
+			String clientCred,
+			boolean usePKCE,
+			boolean useAuthn)
+	{
+	}
+
 
 	public static class OAuthForm
 	{
 		private String authorizationEndpoint;
 		private String tokenEndpoint;
 		private String clientId;
+		private String clientCred;
 		private boolean usePkce;
+		private boolean useAuthn;
 		private String scope;
 		private String extraParam1;
 
@@ -343,6 +362,26 @@ public class OAuthController
 		public void setExtraParam1(String extraParam1)
 		{
 			this.extraParam1 = extraParam1;
+		}
+
+		public String getClientCred()
+		{
+			return clientCred;
+		}
+
+		public void setClientCred(String clientCred)
+		{
+			this.clientCred = clientCred;
+		}
+
+		public boolean isUseAuthn()
+		{
+			return useAuthn;
+		}
+
+		public void setUseAuthn(boolean useAuthn)
+		{
+			this.useAuthn = useAuthn;
 		}
 	}
 }

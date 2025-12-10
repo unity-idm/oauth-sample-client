@@ -30,8 +30,12 @@
                name="tokenEndpoint" type="text" placeholder="https://as.example.com/oauth2/token" required/>
 
 		<label for="clientId">Client ID</label>
-		<input id="clientId" value=""
-               name="clientId" type="text" placeholder="public-client-id" required/>
+		<input id="clientId" value="oauth-client"
+               name="clientId" type="text" placeholder="client-id" required/>
+
+        <label for="clientCred">Client Credential</label>
+        <input id="clientCred" value="oauth-pass1"
+               name="clientCred" type="text" placeholder="client-cred" required/>
 
 		<label for="scope">Scope (optional, space separated)</label>
 		<input id="scope" name="scope" type="text" value="openid profile email"/>
@@ -43,6 +47,11 @@
 			<input id="usePkce" name="usePkce" type="checkbox"/>
 			<label for="usePkce" style="margin:0">Use PKCE (S256)</label>
 		</div>
+
+        <div class="checkbox">
+            <input id="useAuthn" name="useAuthn" type="checkbox"/>
+            <label for="useAuthn" style="margin:0">Use Client authentication (need to set credential)</label>
+        </div>
 
 		<button type="submit">Authenticate</button>
 	</form>
