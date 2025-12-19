@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.nimbusds.jwt.JWT;
+import com.nimbusds.jwt.SignedJWT;
 import com.nimbusds.oauth2.sdk.AccessTokenResponse;
 import com.nimbusds.oauth2.sdk.AuthorizationCode;
 import com.nimbusds.oauth2.sdk.AuthorizationCodeGrant;
@@ -173,11 +174,25 @@ public class OAuthController
 			if (tr.indicatesSuccess())
 			{
 				AccessTokenResponse successResponse = tr.toSuccessResponse();
+				model.addAttribute("parsedResponse",
+						PRETTY.writeValueAsString(successResponse.toJSONObject()));
+
 				Tokens tokens = successResponse.getTokens();
-
-				model.addAttribute("accessToken", tokens.getAccessToken() != null
-						? PRETTY.writeValueAsString(tokens.getAccessToken().toJSONObject()) : null);
-
+				if (tokens.getAccessToken() != null)
+				{
+					try
+					{
+						SignedJWT accessToken = SignedJWT.parse(
+								tokens.getAccessToken().getValue());
+						String stringRep = String.format("header: %s\n\nbody: %s",
+								PRETTY.writeValueAsString(accessToken.getHeader().toJSONObject()),
+								PRETTY.writeValueAsString(accessToken.getJWTClaimsSet().toJSONObject()));
+						model.addAttribute("accessToken", stringRep);
+					} catch (Exception e)
+					{
+						model.addAttribute("accessToken", tokens.getAccessToken().getValue());
+					}
+				}
 
 				if (successResponse instanceof OIDCTokenResponse oidcResponse)
 				{

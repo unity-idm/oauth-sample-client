@@ -15,15 +15,19 @@
 <body>
 <div class="container">
 	<h1>Token Endpoint Response</h1>
-	<p class="small">Below is the raw HTTP response body returned by the OAuth token endpoint.</p>
+    <h2>Raw Response</h2>
 	<pre th:text="${rawResponse}">No response</pre>
 
+    <div th:if="${parsedResponse}">
+        <h2>Response</h2>
+        <pre th:text="${parsedResponse}"></pre>
+    </div>
 	<div th:if="${accessToken}">
-		<h2>Access Token (parsed)</h2>
+		<h2>Access Token</h2>
 		<pre th:text="${accessToken}"></pre>
 	</div>
 	<div th:if="${idToken}">
-		<h2>ID Token parsed claims</h2>
+		<h2>ID Token</h2>
 		<pre th:text="${idToken}"></pre>
 	</div>
 	<div th:if="${oauthError}">
