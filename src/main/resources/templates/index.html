@@ -24,47 +24,47 @@
 
 	<form th:action="@{/start}" method="post" th:object="${form}">
 		<label for="authorizationEndpoint">Authorization endpoint URL</label>
-		<input id="authorizationEndpoint" value="https://localhost:2443/oauth2-as/oauth2-authz"
+		<input id="authorizationEndpoint" th:value="*{authorizationEndpoint}"
                name="authorizationEndpoint" type="text" placeholder="https://as.example.com/oauth2/authorize" required/>
 
 		<label for="tokenEndpoint">Token endpoint URL</label>
-		<input id="tokenEndpoint" value="https://localhost:2443/oauth2/token"
+		<input id="tokenEndpoint" th:value="*{tokenEndpoint}"
                name="tokenEndpoint" type="text" placeholder="https://as.example.com/oauth2/token" required/>
 
 		<label for="userInfoEndpoint">UserInfo endpoint URL (optional, called when set)</label>
-		<input id="userInfoEndpoint" value="https://localhost:2443/oauth2/userinfo"
+		<input id="userInfoEndpoint" th:value="*{userInfoEndpoint}"
                name="userInfoEndpoint" type="text" placeholder="https://as.example.com/oauth2/userinfo"/>
 
 		<label for="clientId">Client ID</label>
-		<input id="clientId" value="oauth-client"
+		<input id="clientId" th:value="*{clientId}"
                name="clientId" type="text" placeholder="client-id" required/>
 
         <label for="clientCred">Client Credential</label>
-        <input id="clientCred" value="oauth-pass1"
+        <input id="clientCred" th:value="*{clientCred}"
                name="clientCred" type="text" placeholder="client-cred" required/>
 
 		<label for="scope">Scope (optional, space separated)</label>
-		<input id="scope" name="scope" type="text" value="openid profile email"/>
+		<input id="scope" name="scope" type="text" th:value="*{scope}"/>
 
         <label for="extraParam1">Additional OAuth request param1 (syntax: name=value)</label>
-        <input id="extraParam1" name="extraParam1" type="text"/>
+        <input id="extraParam1" name="extraParam1" type="text" th:value="*{extraParam1}"/>
 
 		<div class="checkbox">
-			<input id="usePkce" name="usePkce" type="checkbox"/>
+			<input id="usePkce" name="usePkce" type="checkbox" th:checked="*{usePkce}"/>
 			<label for="usePkce" style="margin:0">Use PKCE (S256)</label>
 		</div>
 
         <div class="checkbox">
-            <input id="useAuthn" name="useAuthn" type="checkbox"/>
+            <input id="useAuthn" name="useAuthn" type="checkbox" th:checked="*{useAuthn}"/>
             <label for="useAuthn" style="margin:0">Use Client authentication (need to set credential)</label>
         </div>
 
 		<div class="checkbox">
-			<input id="useDpop" name="useDpop" type="checkbox"/>
+			<input id="useDpop" name="useDpop" type="checkbox" th:checked="*{useDpop}"/>
 			<label for="useDpop" style="margin:0">Use DPoP (RFC 9449)</label>
 		</div>
 
-		<div id="dpopOptions" class="options" style="display:none">
+		<div id="dpopOptions" class="options" th:style="*{useDpop} ? 'display:block' : 'display:none'">
 			<p class="muted">A fresh proof-of-possession key is generated for each authentication. Server
 				provided nonces are handled automatically, both at the token and the UserInfo endpoint.</p>
 
@@ -72,11 +72,12 @@
 			<select id="dpopKeyType" name="dpopKeyType">
 				<option th:each="keyType : ${dpopKeyTypes}"
 						th:value="${keyType}"
+						th:selected="${keyType} == *{dpopKeyType}"
 						th:text="${keyType.label} + ' (' + ${keyType.jwsAlgorithm} + ')'"></option>
 			</select>
 
 			<div class="checkbox">
-				<input id="sendDpopJkt" name="sendDpopJkt" type="checkbox"/>
+				<input id="sendDpopJkt" name="sendDpopJkt" type="checkbox" th:checked="*{sendDpopJkt}"/>
 				<label for="sendDpopJkt" style="margin:0">Send <code>dpop_jkt</code> in the authorization
 					request (binds the code to the key)</label>
 			</div>

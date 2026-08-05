@@ -40,6 +40,7 @@ import com.nimbusds.openid.connect.sdk.OIDCTokenResponse;
 import com.nimbusds.openid.connect.sdk.UserInfoRequest;
 
 import ch.qos.logback.classic.Logger;
+import io.imunity.oauthsampleclient.config.ClientDefaults;
 import io.imunity.oauthsampleclient.dpop.DPoPKeyType;
 import io.imunity.oauthsampleclient.dpop.DPoPProofSigner;
 import io.imunity.oauthsampleclient.dpop.DPoPRequestSender;
@@ -55,10 +56,17 @@ public class OAuthController
 	private static final ObjectWriter PRETTY = JSON.writerWithDefaultPrettyPrinter();
 	public static final String SESSION_STATE = "oauth_state";
 
+	private final ClientDefaults defaults;
+
+	OAuthController(ClientDefaults defaults)
+	{
+		this.defaults = defaults;
+	}
+
 	@GetMapping("/")
 	public String index(HttpServletRequest request, Model model)
 	{
-		model.addAttribute("form", new OAuthForm());
+		model.addAttribute("form", OAuthForm.withDefaults(defaults));
 		model.addAttribute("redirectUri", computeRedirectUri(request));
 		model.addAttribute("dpopKeyTypes", DPoPKeyType.values());
 		return "index";
@@ -72,7 +80,7 @@ public class OAuthController
 		State state = new State();
 		CodeVerifier codeVerifier = null;
 
-		if (form.usePkce())
+		if (form.isUsePkce())
 		{
 			codeVerifier = new CodeVerifier();
 		}
@@ -84,11 +92,11 @@ public class OAuthController
 		OAuthState oauthState = new OAuthState(
 				state.getValue(),
 				codeVerifier != null ? codeVerifier.getValue() : null,
-				form.tokenEndpoint(),
+				form.getTokenEndpoint(),
 				form.getUserInfoEndpoint(),
-				form.clientId(),
+				form.getClientId(),
 				form.getClientCred(),
-				form.usePkce(),
+				form.isUsePkce(),
 				form.isUseAuthn(),
 				dpopSigner != null ? dpopSigner.keyType() : null,
 				dpopSigner != null ? dpopSigner.keyPairJson() : null,
@@ -96,15 +104,15 @@ public class OAuthController
 				);
 		session.setAttribute(SESSION_STATE, oauthState);
 
-		URI authzEndpoint = new URI(form.authorizationEndpoint());
+		URI authzEndpoint = new URI(form.getAuthorizationEndpoint());
 		AuthorizationRequest.Builder builder = new AuthorizationRequest.Builder(new ResponseType("code"),
-				new ClientID(form.clientId()))
+				new ClientID(form.getClientId()))
 					.redirectionURI(new URI(redirectUri))
 					.state(state);
 
-		if (StringUtils.hasText(form.scope()))
+		if (StringUtils.hasText(form.getScope()))
 		{
-			builder.scope(Scope.parse(form.scope()));
+			builder.scope(Scope.parse(form.getScope()));
 		}
 		if (codeVerifier != null)
 		{
@@ -115,9 +123,9 @@ public class OAuthController
 			// RFC 9449 sec. 10: bind the authorization code to the DPoP key already at the authz request
 			builder.dPoPJWKThumbprintConfirmation(dpopSigner.thumbprintConfirmation());
 		}
-		if (StringUtils.hasText(form.extraParam1))
+		if (StringUtils.hasText(form.getExtraParam1()))
 		{
-			String[] params = form.extraParam1.split("=");
+			String[] params = form.getExtraParam1().split("=");
 			builder.customParameter(params[0], params[1]);
 		}
 
@@ -352,6 +360,11 @@ public class OAuthController
 
 	private String computeRedirectUri(HttpServletRequest request)
 	{
+		// A configured redirect URI wins over autodetection - and must be used consistently at both the
+		// authorization and the token request, which it is, as both go through this method.
+		if (StringUtils.hasText(defaults.getRedirectUri()))
+			return defaults.getRedirectUri();
+
 		String scheme = request.getHeader("X-Forwarded-Proto");
 		if (!StringUtils.hasText(scheme))
 			scheme = request.getScheme();
@@ -465,7 +478,25 @@ public class OAuthController
 		private String scope;
 		private String extraParam1;
 
-		public String authorizationEndpoint()
+		static OAuthForm withDefaults(ClientDefaults defaults)
+		{
+			OAuthForm form = new OAuthForm();
+			form.setAuthorizationEndpoint(defaults.getAuthorizationEndpoint());
+			form.setTokenEndpoint(defaults.getTokenEndpoint());
+			form.setUserInfoEndpoint(defaults.getUserInfoEndpoint());
+			form.setClientId(defaults.getClientId());
+			form.setClientCred(defaults.getClientCred());
+			form.setScope(defaults.getScope());
+			form.setExtraParam1(defaults.getExtraParam1());
+			form.setUsePkce(defaults.isUsePkce());
+			form.setUseAuthn(defaults.isUseAuthn());
+			form.setUseDpop(defaults.isUseDpop());
+			form.setDpopKeyType(defaults.getDpopKeyType());
+			form.setSendDpopJkt(defaults.isSendDpopJkt());
+			return form;
+		}
+
+		public String getAuthorizationEndpoint()
 		{
 			return authorizationEndpoint;
 		}
@@ -475,7 +506,7 @@ public class OAuthController
 			this.authorizationEndpoint = authorizationEndpoint;
 		}
 
-		public String tokenEndpoint()
+		public String getTokenEndpoint()
 		{
 			return tokenEndpoint;
 		}
@@ -495,7 +526,7 @@ public class OAuthController
 			this.userInfoEndpoint = userInfoEndpoint;
 		}
 
-		public String clientId()
+		public String getClientId()
 		{
 			return clientId;
 		}
@@ -505,7 +536,7 @@ public class OAuthController
 			this.clientId = clientId;
 		}
 
-		public boolean usePkce()
+		public boolean isUsePkce()
 		{
 			return usePkce;
 		}
@@ -515,7 +546,7 @@ public class OAuthController
 			this.usePkce = usePkce;
 		}
 
-		public String scope()
+		public String getScope()
 		{
 			return scope;
 		}
@@ -523,6 +554,11 @@ public class OAuthController
 		public void setScope(String scope)
 		{
 			this.scope = scope;
+		}
+
+		public String getExtraParam1()
+		{
+			return extraParam1;
 		}
 
 		public void setExtraParam1(String extraParam1)

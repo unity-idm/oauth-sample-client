@@ -1,0 +1,64 @@
+# Example configuration of this OAuth client.
+#
+# Copy this file to client-defaults.properties (which is git ignored, so your own AS URLs and credentials
+# stay out of the repository) and adjust it:
+#
+#     cp client-defaults.properties.example client-defaults.properties
+#
+# The file is picked up from the working directory the app is started in - the project root when running
+# with `mvn spring-boot:run`. It is optional: without it the values shipped in
+# src/main/resources/application.properties are used, which are the same as the ones below.
+#
+# Everything here only pre-fills the form on the start screen - each value can still be changed in the UI
+# before the flow is started.
+
+# --- Endpoints of the authorization server ---
+
+oauth.client.defaults.authorization-endpoint=https://localhost:2443/oauth2-as/oauth2-authz
+oauth.client.defaults.token-endpoint=https://localhost:2443/oauth2/token
+
+# Optional: when set, UserInfo is retrieved with the obtained access token
+oauth.client.defaults.user-info-endpoint=https://localhost:2443/oauth2/userinfo
+
+# --- Client identity ---
+
+oauth.client.defaults.client-id=oauth-client
+
+# Used only when client authentication is enabled (use-authn below)
+oauth.client.defaults.client-cred=oauth-pass1
+
+# --- Authorization request ---
+
+# Optional, space separated
+oauth.client.defaults.scope=openid profile email
+
+# Optional additional authorization request parameter, syntax: name=value
+oauth.client.defaults.extra-param1=
+
+# --- Flow options (the checkboxes) ---
+
+# PKCE with S256
+oauth.client.defaults.use-pkce=false
+
+# Confidential client: authenticate at the token endpoint with client-cred
+oauth.client.defaults.use-authn=false
+
+# DPoP, RFC 9449
+oauth.client.defaults.use-dpop=false
+
+# Kind of the proof-of-possession key, one of: EC (P-256/ES256), RSA (2048/RS256), EDDSA (Ed25519/EdDSA)
+oauth.client.defaults.dpop-key-type=EC
+
+# Send dpop_jkt with the authorization request, binding the authorization code to the DPoP key
+oauth.client.defaults.send-dpop-jkt=false
+
+# --- Redirect URI ---
+
+# Empty means it is computed from the incoming request, honoring the X-Forwarded-Proto and X-Forwarded-Host
+# headers. Set it only when that autodetection can not work, e.g. behind a proxy which does not send those
+# headers. Must be registered at the authorization server.
+oauth.client.defaults.redirect-uri=
+
+# --- Anything else Spring Boot understands can be set here too, e.g. the HTTP port ---
+
+#server.port=8085

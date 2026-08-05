@@ -4,6 +4,28 @@ A standalone OAuth Client. Implemented with the help of Spring Boot using Nimbus
 
 Supports PKCE, confidential client authentication, DPoP and UserInfo retrieval.
 
+## Configuration
+
+The values pre-filled into the form on the start screen - endpoint URLs, client id and credential, scope and
+the flow options - are configurable, so that a frequently used AS does not have to be typed in over and over.
+They are only defaults: each one can still be changed in the UI before starting the flow.
+
+The shipped defaults are in `src/main/resources/application.properties`, under the `oauth.client.defaults.*`
+prefix. To override them locally, copy the example file:
+
+```
+cp client-defaults.properties.example client-defaults.properties
+```
+
+`client-defaults.properties` is git ignored, so your own AS URLs and credentials stay out of the repository.
+It is optional and picked up from the working directory the app is started in (the project root when running
+with `mvn spring-boot:run`). See `client-defaults.properties.example` for the full list of settings with
+comments. Any other Spring Boot property, e.g. `server.port`, can be set there as well.
+
+One setting is not a form field: `oauth.client.defaults.redirect-uri`. Left empty, the redirect URI is
+computed from the incoming request, honoring the `X-Forwarded-Proto` and `X-Forwarded-Host` headers. Set it
+only when that autodetection can not work, e.g. behind a proxy which does not send those headers.
+
 ## DPoP
 
 DPoP (RFC 9449) is enabled with a checkbox on the initial screen. When enabled:
