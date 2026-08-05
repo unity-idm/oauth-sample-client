@@ -10,6 +10,13 @@
 		.container { max-width: 900px; margin: auto; }
 		.small { color:#666; }
 		a { text-decoration: none; }
+		table.summary { border-collapse: collapse; width: 100%; }
+		table.summary th, table.summary td { border: 1px solid #ddd; padding: .4rem .6rem; text-align: left;
+			vertical-align: top; }
+		table.summary th { width: 16rem; background: #fafafa; }
+		.headline { font-size: 1.05rem; padding: .6rem 1rem; background: #eef4ff; border-left: 4px solid #4a76c8; }
+		details { margin-top: .8rem; }
+		summary { cursor: pointer; }
 	</style>
 </head>
 <body>
@@ -33,6 +40,63 @@
 	<div th:if="${oauthError}">
 		<h2>OAuth Error</h2>
 		<pre th:text="${oauthError}"></pre>
+	</div>
+
+	<div th:if="${userInfoResponse}">
+		<h2>UserInfo Response</h2>
+		<pre th:text="${userInfoResponse}"></pre>
+	</div>
+
+	<div th:if="${dpop}">
+		<h2>DPoP Summary</h2>
+		<p class="headline" th:text="${dpop.headline}"></p>
+		<table class="summary">
+			<tr>
+				<th>DPoP used</th>
+				<td th:text="${dpop.used} ? 'Yes' : 'No'"></td>
+			</tr>
+			<tr th:if="${dpop.used}">
+				<th>Proof-of-possession key</th>
+				<td th:text="${dpop.keyType} + ', signing with ' + ${dpop.jwsAlgorithm}"></td>
+			</tr>
+			<tr th:if="${dpop.used}">
+				<th>Key thumbprint (jkt)</th>
+				<td th:text="${dpop.thumbprint}"></td>
+			</tr>
+			<tr th:if="${dpop.used}">
+				<th><code>dpop_jkt</code> in authorization request</th>
+				<td th:text="${dpop.authorizationRequestJktSent} ? 'Sent' : 'Not sent'"></td>
+			</tr>
+			<tr th:if="${dpop.used}">
+				<th>Token endpoint nonce</th>
+				<td th:text="${dpop.tokenEndpointNonceStatus}"></td>
+			</tr>
+			<tr th:if="${dpop.userInfoTokenPresentation}">
+				<th>UserInfo token presented as</th>
+				<td th:text="${dpop.userInfoTokenPresentation}"></td>
+			</tr>
+			<tr>
+				<th>UserInfo endpoint nonce</th>
+				<td th:text="${dpop.userInfoNonceStatus}"></td>
+			</tr>
+			<tr th:if="${dpop.tokenTypeReturned}">
+				<th>Token type returned by the AS</th>
+				<td th:text="${dpop.tokenTypeReturned}"></td>
+			</tr>
+		</table>
+
+		<details th:if="${dpop.publicJwk}">
+			<summary>Public DPoP key (JWK)</summary>
+			<pre th:text="${dpop.publicJwk}"></pre>
+		</details>
+		<details th:if="${dpop.tokenEndpointProof}">
+			<summary>DPoP proof sent to the token endpoint</summary>
+			<pre th:text="${dpop.tokenEndpointProof}"></pre>
+		</details>
+		<details th:if="${dpop.userInfoProof}">
+			<summary>DPoP proof sent to the UserInfo endpoint</summary>
+			<pre th:text="${dpop.userInfoProof}"></pre>
+		</details>
 	</div>
 
 	<p><a href="/">&#8592; Back</a></p>

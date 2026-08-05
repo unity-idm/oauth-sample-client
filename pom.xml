@@ -52,6 +52,23 @@
 			<artifactId>oauth2-oidc-sdk</artifactId>
 			<version>11.29.2</version>
 		</dependency>
+
+		<!-- Nimbus declares Tink as optional, but its Ed25519 (EdDSA) signer needs it at runtime -->
+		<dependency>
+			<groupId>com.google.crypto.tink</groupId>
+			<artifactId>tink</artifactId>
+			<version>1.16.0</version>
+			<exclusions>
+				<exclusion>
+					<groupId>com.google.protobuf</groupId>
+					<artifactId>protobuf-java</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>com.google.code.gson</groupId>
+					<artifactId>gson</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
 	</dependencies>
 
 	<build>

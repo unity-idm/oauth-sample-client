@@ -31,10 +31,19 @@ import com.nimbusds.oauth2.sdk.id.ClientID;
 import com.nimbusds.oauth2.sdk.id.State;
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod;
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier;
+import com.nimbusds.oauth2.sdk.token.AccessToken;
+import com.nimbusds.oauth2.sdk.token.AccessTokenType;
+import com.nimbusds.oauth2.sdk.token.BearerAccessToken;
+import com.nimbusds.oauth2.sdk.token.DPoPAccessToken;
 import com.nimbusds.oauth2.sdk.token.Tokens;
 import com.nimbusds.openid.connect.sdk.OIDCTokenResponse;
+import com.nimbusds.openid.connect.sdk.UserInfoRequest;
 
 import ch.qos.logback.classic.Logger;
+import io.imunity.oauthsampleclient.dpop.DPoPKeyType;
+import io.imunity.oauthsampleclient.dpop.DPoPProofSigner;
+import io.imunity.oauthsampleclient.dpop.DPoPRequestSender;
+import io.imunity.oauthsampleclient.dpop.DPoPSummary;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 
@@ -42,7 +51,8 @@ import jakarta.servlet.http.HttpSession;
 public class OAuthController
 {
 	private static final Logger log = (Logger) org.slf4j.LoggerFactory.getLogger(OAuthController.class);
-	private static final ObjectWriter PRETTY = new ObjectMapper().writerWithDefaultPrettyPrinter();
+	private static final ObjectMapper JSON = new ObjectMapper();
+	private static final ObjectWriter PRETTY = JSON.writerWithDefaultPrettyPrinter();
 	public static final String SESSION_STATE = "oauth_state";
 
 	@GetMapping("/")
@@ -50,6 +60,7 @@ public class OAuthController
 	{
 		model.addAttribute("form", new OAuthForm());
 		model.addAttribute("redirectUri", computeRedirectUri(request));
+		model.addAttribute("dpopKeyTypes", DPoPKeyType.values());
 		return "index";
 	}
 
@@ -66,15 +77,22 @@ public class OAuthController
 			codeVerifier = new CodeVerifier();
 		}
 
+		// The DPoP proof-of-possession key is generated on demand, per authentication attempt
+		DPoPProofSigner dpopSigner = form.isUseDpop() ? DPoPProofSigner.withFreshKey(form.getDpopKeyType()) : null;
+
 		// Store context in session
 		OAuthState oauthState = new OAuthState(
 				state.getValue(),
 				codeVerifier != null ? codeVerifier.getValue() : null,
 				form.tokenEndpoint(),
+				form.getUserInfoEndpoint(),
 				form.clientId(),
 				form.getClientCred(),
 				form.usePkce(),
-				form.isUseAuthn()
+				form.isUseAuthn(),
+				dpopSigner != null ? dpopSigner.keyType() : null,
+				dpopSigner != null ? dpopSigner.keyPairJson() : null,
+				dpopSigner != null && form.isSendDpopJkt()
 				);
 		session.setAttribute(SESSION_STATE, oauthState);
 
@@ -91,6 +109,11 @@ public class OAuthController
 		if (codeVerifier != null)
 		{
 			builder.codeChallenge(codeVerifier, CodeChallengeMethod.S256);
+		}
+		if (oauthState.sendDpopJkt)
+		{
+			// RFC 9449 sec. 10: bind the authorization code to the DPoP key already at the authz request
+			builder.dPoPJWKThumbprintConfirmation(dpopSigner.thumbprintConfirmation());
 		}
 		if (StringUtils.hasText(form.extraParam1))
 		{
@@ -111,6 +134,11 @@ public class OAuthController
 			HttpServletRequest request, HttpSession session, Model model) throws Exception
 	{
 		OAuthState oauthState = (OAuthState) session.getAttribute(SESSION_STATE);
+		if (oauthState == null)
+		{
+			model.addAttribute("rawResponse", "No authentication in progress in this session - start over.");
+			return "result";
+		}
 		if (!StringUtils.hasText(oauthState.state) || !Objects.equals(oauthState.state, stateParam))
 		{
 			model.addAttribute("rawResponse", "State mismatch or missing session. Expected: " + oauthState.state
@@ -124,6 +152,12 @@ public class OAuthController
 			return "result";
 		}
 
+		DPoPProofSigner dpopSigner = oauthState.dpopKeyType != null
+				? DPoPProofSigner.withStoredKey(oauthState.dpopKeyType, oauthState.dpopKeyJson)
+				: null;
+		DPoPSummary dpopSummary = describeKey(dpopSigner, oauthState.sendDpopJkt);
+		model.addAttribute("dpop", dpopSummary);
+
 		String redirectUri = computeRedirectUri(request);
 
 		AuthorizationCodeGrant grant;
@@ -135,39 +169,30 @@ public class OAuthController
 		{
 			grant = new AuthorizationCodeGrant(new AuthorizationCode(code), new URI(redirectUri));
 		}
-		com.nimbusds.oauth2.sdk.TokenRequest tokenRequest;
-		if (oauthState.useAuthn)
-		{
-			tokenRequest = new com.nimbusds.oauth2.sdk.TokenRequest(
-					new URI(oauthState.tokenEndpoint),
-					new ClientSecretBasic(new ClientID(oauthState.clientId),
-							new Secret(oauthState.clientCred)),
-					grant,
-					null);
-		} else
-		{
-			tokenRequest = new com.nimbusds.oauth2.sdk.TokenRequest(
-					new URI(oauthState.tokenEndpoint),
-					new ClientID(oauthState.clientId),
-					grant,
-					null);
-		}
-		HTTPRequest httpRequest = tokenRequest.toHTTPRequest();
-		HTTPResponse httpResponse;
+
+		URI tokenEndpoint = new URI(oauthState.tokenEndpoint);
+		final com.nimbusds.oauth2.sdk.TokenRequest tokenRequest = buildTokenRequest(oauthState, tokenEndpoint, grant);
+
+		DPoPRequestSender.Outcome tokenOutcome;
 		try
 		{
-			configureInsecureTLS(httpRequest);
-			httpResponse = httpRequest.send();
+			tokenOutcome = DPoPRequestSender.send(() -> prepare(tokenRequest.toHTTPRequest()), dpopSigner,
+					"POST", tokenEndpoint, null);
 		} catch (Exception e)
 		{
 			log.error("Error sending token request", e);
 			model.addAttribute("rawResponse", "Error sending token request: " + e.getMessage());
 			return "result";
 		}
+		dpopSummary.setTokenEndpointNonceChallenged(tokenOutcome.nonceChallenged());
+		dpopSummary.setTokenEndpointNonce(valueOrNull(tokenOutcome.nonceUsed()));
+		dpopSummary.setTokenEndpointProof(describeProof(tokenOutcome.proof()));
 
+		HTTPResponse httpResponse = tokenOutcome.response();
 		String body = httpResponse.getBody();
 		model.addAttribute("rawResponse", "HTTP " + httpResponse.getStatusCode() + "\n\n" + body);
 
+		Tokens tokens = null;
 		try
 		{
 			TokenResponse tr = OIDCTokenResponse.parse(httpResponse);
@@ -177,9 +202,10 @@ public class OAuthController
 				model.addAttribute("parsedResponse",
 						PRETTY.writeValueAsString(successResponse.toJSONObject()));
 
-				Tokens tokens = successResponse.getTokens();
+				tokens = successResponse.getTokens();
 				if (tokens.getAccessToken() != null)
 				{
+					dpopSummary.setTokenTypeReturned(tokens.getAccessToken().getType().getValue());
 					try
 					{
 						SignedJWT accessToken = SignedJWT.parse(
@@ -214,7 +240,114 @@ public class OAuthController
 			log.error("Error parsing response", e);
 		}
 
+		if (tokens != null && tokens.getAccessToken() != null && StringUtils.hasText(oauthState.userInfoEndpoint))
+		{
+			retrieveUserInfo(oauthState, tokens.getAccessToken(), dpopSigner, dpopSummary, model);
+		}
+
 		return "result";
+	}
+
+	private void retrieveUserInfo(OAuthState oauthState, AccessToken accessToken, DPoPProofSigner dpopSigner,
+			DPoPSummary dpopSummary, Model model)
+	{
+		try
+		{
+			URI userInfoEndpoint = new URI(oauthState.userInfoEndpoint);
+			dpopSummary.setUserInfoRequested(true);
+			// The token must be presented the way the AS bound it: a proof only makes sense for a token
+			// which the AS actually returned as DPoP bound
+			boolean dpopBound = dpopSigner != null && AccessTokenType.DPOP.equals(accessToken.getType());
+			AccessToken presentedToken = dpopBound
+					? new DPoPAccessToken(accessToken.getValue())
+					: new BearerAccessToken(accessToken.getValue());
+			DPoPProofSigner userInfoSigner = dpopBound ? dpopSigner : null;
+			dpopSummary.setUserInfoDpopBound(dpopBound);
+			UserInfoRequest userInfoRequest = new UserInfoRequest(userInfoEndpoint, HTTPRequest.Method.GET,
+					presentedToken);
+
+			DPoPRequestSender.Outcome outcome = DPoPRequestSender.send(
+					() -> prepare(userInfoRequest.toHTTPRequest()), userInfoSigner, "GET", userInfoEndpoint,
+					presentedToken);
+
+			dpopSummary.setUserInfoNonceChallenged(outcome.nonceChallenged());
+			dpopSummary.setUserInfoNonce(valueOrNull(outcome.nonceUsed()));
+			dpopSummary.setUserInfoProof(describeProof(outcome.proof()));
+
+			HTTPResponse response = outcome.response();
+			model.addAttribute("userInfoResponse",
+					"HTTP " + response.getStatusCode() + "\n\n" + prettyJsonOrRaw(response.getBody()));
+		} catch (Exception e)
+		{
+			log.error("Error retrieving user info", e);
+			model.addAttribute("userInfoResponse", "Error retrieving user info: " + e.getMessage());
+		}
+	}
+
+	private com.nimbusds.oauth2.sdk.TokenRequest buildTokenRequest(OAuthState oauthState, URI tokenEndpoint,
+			AuthorizationCodeGrant grant)
+	{
+		if (oauthState.useAuthn)
+		{
+			return new com.nimbusds.oauth2.sdk.TokenRequest(
+					tokenEndpoint,
+					new ClientSecretBasic(new ClientID(oauthState.clientId),
+							new Secret(oauthState.clientCred)),
+					grant,
+					null);
+		}
+		return new com.nimbusds.oauth2.sdk.TokenRequest(
+				tokenEndpoint,
+				new ClientID(oauthState.clientId),
+				grant,
+				null);
+	}
+
+	private DPoPSummary describeKey(DPoPProofSigner dpopSigner, boolean sendDpopJkt) throws Exception
+	{
+		DPoPSummary summary = new DPoPSummary();
+		summary.setUsed(dpopSigner != null);
+		if (dpopSigner == null)
+			return summary;
+		summary.setKeyType(dpopSigner.keyType().getLabel());
+		summary.setJwsAlgorithm(dpopSigner.keyType().getJwsAlgorithm().getName());
+		summary.setThumbprint(dpopSigner.thumbprintConfirmation().getValue().toString());
+		summary.setPublicJwk(PRETTY.writeValueAsString(dpopSigner.publicKey().toJSONObject()));
+		summary.setAuthorizationRequestJktSent(sendDpopJkt);
+		return summary;
+	}
+
+	private static String describeProof(SignedJWT proof) throws Exception
+	{
+		if (proof == null)
+			return null;
+		return String.format("header: %s\n\nbody: %s",
+				PRETTY.writeValueAsString(proof.getHeader().toJSONObject()),
+				PRETTY.writeValueAsString(proof.getJWTClaimsSet().toJSONObject()));
+	}
+
+	private static String valueOrNull(com.nimbusds.openid.connect.sdk.Nonce nonce)
+	{
+		return nonce != null ? nonce.getValue() : null;
+	}
+
+	private static String prettyJsonOrRaw(String body)
+	{
+		if (!StringUtils.hasText(body))
+			return body;
+		try
+		{
+			return PRETTY.writeValueAsString(JSON.readTree(body));
+		} catch (Exception e)
+		{
+			return body;
+		}
+	}
+
+	private static HTTPRequest prepare(HTTPRequest httpRequest)
+	{
+		configureInsecureTLS(httpRequest);
+		return httpRequest;
 	}
 
 	private String computeRedirectUri(HttpServletRequest request)
@@ -305,10 +438,14 @@ public class OAuthController
 			String state,
 			String codeVerifier,
 			String tokenEndpoint,
+			String userInfoEndpoint,
 			String clientId,
 			String clientCred,
 			boolean usePKCE,
-			boolean useAuthn)
+			boolean useAuthn,
+			DPoPKeyType dpopKeyType,
+			String dpopKeyJson,
+			boolean sendDpopJkt)
 	{
 	}
 
@@ -317,10 +454,14 @@ public class OAuthController
 	{
 		private String authorizationEndpoint;
 		private String tokenEndpoint;
+		private String userInfoEndpoint;
 		private String clientId;
 		private String clientCred;
 		private boolean usePkce;
 		private boolean useAuthn;
+		private boolean useDpop;
+		private DPoPKeyType dpopKeyType = DPoPKeyType.EC;
+		private boolean sendDpopJkt;
 		private String scope;
 		private String extraParam1;
 
@@ -342,6 +483,16 @@ public class OAuthController
 		public void setTokenEndpoint(String tokenEndpoint)
 		{
 			this.tokenEndpoint = tokenEndpoint;
+		}
+
+		public String getUserInfoEndpoint()
+		{
+			return userInfoEndpoint;
+		}
+
+		public void setUserInfoEndpoint(String userInfoEndpoint)
+		{
+			this.userInfoEndpoint = userInfoEndpoint;
 		}
 
 		public String clientId()
@@ -397,6 +548,36 @@ public class OAuthController
 		public void setUseAuthn(boolean useAuthn)
 		{
 			this.useAuthn = useAuthn;
+		}
+
+		public boolean isUseDpop()
+		{
+			return useDpop;
+		}
+
+		public void setUseDpop(boolean useDpop)
+		{
+			this.useDpop = useDpop;
+		}
+
+		public DPoPKeyType getDpopKeyType()
+		{
+			return dpopKeyType != null ? dpopKeyType : DPoPKeyType.EC;
+		}
+
+		public void setDpopKeyType(DPoPKeyType dpopKeyType)
+		{
+			this.dpopKeyType = dpopKeyType;
+		}
+
+		public boolean isSendDpopJkt()
+		{
+			return sendDpopJkt;
+		}
+
+		public void setSendDpopJkt(boolean sendDpopJkt)
+		{
+			this.sendDpopJkt = sendDpopJkt;
 		}
 	}
 }

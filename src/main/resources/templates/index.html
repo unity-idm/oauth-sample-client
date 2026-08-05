@@ -9,9 +9,11 @@
 		.container { max-width: 800px; margin: auto; }
 		label { display: block; margin-top: 1rem; font-weight: bold; }
 		input[type=text] { width: 100%; padding: .5rem; }
+		select { padding: .5rem; }
 		button { margin-top: 1.5rem; padding: .6rem 1rem; }
 		.muted { color: #666; font-size: .9rem; }
 		.checkbox { display:flex; align-items:center; gap:.5rem; margin-top: 1rem; }
+		.options { margin-left: 1.5rem; padding-left: 1rem; border-left: 3px solid #ddd; }
 	</style>
 </head>
 <body>
@@ -29,6 +31,10 @@
 		<input id="tokenEndpoint" value="https://localhost:2443/oauth2/token"
                name="tokenEndpoint" type="text" placeholder="https://as.example.com/oauth2/token" required/>
 
+		<label for="userInfoEndpoint">UserInfo endpoint URL (optional, called when set)</label>
+		<input id="userInfoEndpoint" value="https://localhost:2443/oauth2/userinfo"
+               name="userInfoEndpoint" type="text" placeholder="https://as.example.com/oauth2/userinfo"/>
+
 		<label for="clientId">Client ID</label>
 		<input id="clientId" value="oauth-client"
                name="clientId" type="text" placeholder="client-id" required/>
@@ -40,7 +46,7 @@
 		<label for="scope">Scope (optional, space separated)</label>
 		<input id="scope" name="scope" type="text" value="openid profile email"/>
 
-        <label for="scope">Additional OAuth request param1 (syntax: name=value)</label>
+        <label for="extraParam1">Additional OAuth request param1 (syntax: name=value)</label>
         <input id="extraParam1" name="extraParam1" type="text"/>
 
 		<div class="checkbox">
@@ -53,8 +59,40 @@
             <label for="useAuthn" style="margin:0">Use Client authentication (need to set credential)</label>
         </div>
 
+		<div class="checkbox">
+			<input id="useDpop" name="useDpop" type="checkbox"/>
+			<label for="useDpop" style="margin:0">Use DPoP (RFC 9449)</label>
+		</div>
+
+		<div id="dpopOptions" class="options" style="display:none">
+			<p class="muted">A fresh proof-of-possession key is generated for each authentication. Server
+				provided nonces are handled automatically, both at the token and the UserInfo endpoint.</p>
+
+			<label for="dpopKeyType">DPoP key</label>
+			<select id="dpopKeyType" name="dpopKeyType">
+				<option th:each="keyType : ${dpopKeyTypes}"
+						th:value="${keyType}"
+						th:text="${keyType.label} + ' (' + ${keyType.jwsAlgorithm} + ')'"></option>
+			</select>
+
+			<div class="checkbox">
+				<input id="sendDpopJkt" name="sendDpopJkt" type="checkbox"/>
+				<label for="sendDpopJkt" style="margin:0">Send <code>dpop_jkt</code> in the authorization
+					request (binds the code to the key)</label>
+			</div>
+		</div>
+
 		<button type="submit">Authenticate</button>
 	</form>
 </div>
+<script>
+	(function () {
+		var useDpop = document.getElementById('useDpop');
+		var options = document.getElementById('dpopOptions');
+		function refresh() { options.style.display = useDpop.checked ? 'block' : 'none'; }
+		useDpop.addEventListener('change', refresh);
+		refresh();
+	})();
+</script>
 </body>
 </html>
