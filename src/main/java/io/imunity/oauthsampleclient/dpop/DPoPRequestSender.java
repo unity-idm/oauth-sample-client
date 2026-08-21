@@ -51,18 +51,29 @@ public class DPoPRequestSender
 	public static Outcome send(RequestSupplier requestSupplier, DPoPProofSigner signer, String httpMethod,
 			URI endpoint, AccessToken accessToken) throws Exception
 	{
+		return send(requestSupplier, signer, httpMethod, endpoint, accessToken, null);
+	}
+
+	/**
+	 * Sends a request, optionally reusing a nonce offered by the server on an earlier request. This is useful
+	 * for protocols such as device flow where several token requests are made with the same DPoP key.
+	 */
+	public static Outcome send(RequestSupplier requestSupplier, DPoPProofSigner signer, String httpMethod,
+			URI endpoint, AccessToken accessToken, Nonce initialNonce) throws Exception
+	{
 		if (signer == null)
 		{
 			HTTPResponse response = requestSupplier.get().send();
 			return new Outcome(response, null, null, false, response.getDPoPNonce());
 		}
 
-		SignedJWT proof = signer.createProof(httpMethod, endpoint, accessToken, null);
+		SignedJWT proof = signer.createProof(httpMethod, endpoint, accessToken, initialNonce);
 		HTTPResponse response = sendWithProof(requestSupplier, proof);
 		Nonce serverNonce = response.getDPoPNonce();
 
 		if (!requiresNonce(response))
-			return new Outcome(response, proof, null, false, serverNonce);
+			return new Outcome(response, proof, initialNonce, false,
+					serverNonce != null ? serverNonce : initialNonce);
 
 		proof = signer.createProof(httpMethod, endpoint, accessToken, serverNonce);
 		response = sendWithProof(requestSupplier, proof);

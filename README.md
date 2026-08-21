@@ -2,7 +2,8 @@
 
 A standalone OAuth Client. Implemented with the help of Spring Boot using Nimbus OAuth 2.0 / OIDC SDK (no Spring Security OAuth client).
 
-Supports PKCE, confidential client authentication, DPoP and UserInfo retrieval.
+Supports Authorization Code flow, Device Authorization flow (RFC 8628), PKCE, confidential client
+authentication, DPoP and UserInfo retrieval.
 
 ## Configuration
 
@@ -25,6 +26,21 @@ comments. Any other Spring Boot property, e.g. `server.port`, can be set there a
 One setting is not a form field: `oauth.client.defaults.redirect-uri`. Left empty, the redirect URI is
 computed from the incoming request, honoring the `X-Forwarded-Proto` and `X-Forwarded-Host` headers. Set it
 only when that autodetection can not work, e.g. behind a proxy which does not send those headers.
+
+## Device Authorization flow
+
+The initial screen has a separate **Run Device flow** button. The device authorization endpoint is required
+only for that flow. After the initial request, the client shows the verification URL and user code, plus the
+complete verification URL when the authorization server supplies one. The page then polls the token endpoint
+automatically until the user approves the request or a terminal error is returned.
+
+The polling interval is configurable on the form and with
+`oauth.client.defaults.device-polling-interval-seconds`. RFC 8628 timing rules are still enforced: a larger
+`interval` returned by the authorization server takes precedence, early browser requests are rate-limited by
+the server-side client, and `slow_down` increases all subsequent intervals by five seconds. Pending responses
+stay on the device page; success and terminal errors use the existing token result page. Device flow also
+supports the existing confidential-client, DPoP, and UserInfo options. PKCE is specific to Authorization Code
+flow and is ignored for Device flow.
 
 ## DPoP
 

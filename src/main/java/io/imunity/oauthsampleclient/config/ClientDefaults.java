@@ -17,6 +17,7 @@ import io.imunity.oauthsampleclient.dpop.DPoPKeyType;
 public class ClientDefaults
 {
 	private String authorizationEndpoint;
+	private String deviceAuthorizationEndpoint;
 	private String tokenEndpoint;
 	private String userInfoEndpoint;
 	private String clientId;
@@ -28,6 +29,7 @@ public class ClientDefaults
 	private boolean useDpop;
 	private DPoPKeyType dpopKeyType = DPoPKeyType.EC;
 	private boolean sendDpopJkt;
+	private long devicePollingIntervalSeconds = 5;
 
 	/**
 	 * Redirect URI advertised to the AS. Empty (the default) means it is computed from the incoming request,
@@ -44,6 +46,16 @@ public class ClientDefaults
 	public void setAuthorizationEndpoint(String authorizationEndpoint)
 	{
 		this.authorizationEndpoint = authorizationEndpoint;
+	}
+
+	public String getDeviceAuthorizationEndpoint()
+	{
+		return deviceAuthorizationEndpoint;
+	}
+
+	public void setDeviceAuthorizationEndpoint(String deviceAuthorizationEndpoint)
+	{
+		this.deviceAuthorizationEndpoint = deviceAuthorizationEndpoint;
 	}
 
 	public String getTokenEndpoint()
@@ -154,6 +166,16 @@ public class ClientDefaults
 	public void setSendDpopJkt(boolean sendDpopJkt)
 	{
 		this.sendDpopJkt = sendDpopJkt;
+	}
+
+	public long getDevicePollingIntervalSeconds()
+	{
+		return devicePollingIntervalSeconds;
+	}
+
+	public void setDevicePollingIntervalSeconds(long devicePollingIntervalSeconds)
+	{
+		this.devicePollingIntervalSeconds = devicePollingIntervalSeconds;
 	}
 
 	public String getRedirectUri()

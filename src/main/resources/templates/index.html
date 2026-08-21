@@ -8,9 +8,10 @@
 		body { font-family: Arial, sans-serif; margin: 2rem; }
 		.container { max-width: 800px; margin: auto; }
 		label { display: block; margin-top: 1rem; font-weight: bold; }
-		input[type=text] { width: 100%; padding: .5rem; }
+		input[type=text], input[type=number] { width: 100%; padding: .5rem; box-sizing: border-box; }
 		select { padding: .5rem; }
 		button { margin-top: 1.5rem; padding: .6rem 1rem; }
+		button + button { margin-left: .5rem; }
 		.muted { color: #666; font-size: .9rem; }
 		.checkbox { display:flex; align-items:center; gap:.5rem; margin-top: 1rem; }
 		.options { margin-left: 1.5rem; padding-left: 1rem; border-left: 3px solid #ddd; }
@@ -19,13 +20,25 @@
 <body>
 <div class="container">
 	<h1>OAuth Sample Client</h1>
-	<p class="muted">This simple client performs Authorization Code flow using Nimbus libs. The redirect URL is:
+	<p class="muted">This simple client performs Authorization Code and Device Authorization flows using Nimbus
+		libs. The redirect URL for Authorization Code flow is:
 		<strong th:text="${redirectUri}"></strong></p>
 
-	<form th:action="@{/start}" method="post" th:object="${form}">
-		<label for="authorizationEndpoint">Authorization endpoint URL</label>
+	<form id="oauthForm" th:action="@{/start}" method="post" th:object="${form}">
+		<label for="authorizationEndpoint">Authorization endpoint URL (Authorization Code flow)</label>
 		<input id="authorizationEndpoint" th:value="*{authorizationEndpoint}"
                name="authorizationEndpoint" type="text" placeholder="https://as.example.com/oauth2/authorize" required/>
+
+		<label for="deviceAuthorizationEndpoint">Device authorization endpoint URL (Device flow)</label>
+		<input id="deviceAuthorizationEndpoint" th:value="*{deviceAuthorizationEndpoint}"
+			   name="deviceAuthorizationEndpoint" type="text"
+			   placeholder="https://as.example.com/oauth2/device_authorization"/>
+
+		<label for="devicePollingIntervalSeconds">Device flow polling interval in seconds</label>
+		<input id="devicePollingIntervalSeconds" th:value="*{devicePollingIntervalSeconds}"
+			   name="devicePollingIntervalSeconds" type="number" min="1" max="3600" step="1"/>
+		<p class="muted">The authorization server's returned interval is treated as a minimum. A
+			<code>slow_down</code> response adds five seconds, as required by RFC 8628.</p>
 
 		<label for="tokenEndpoint">Token endpoint URL</label>
 		<input id="tokenEndpoint" th:value="*{tokenEndpoint}"
@@ -39,19 +52,19 @@
 		<input id="clientId" th:value="*{clientId}"
                name="clientId" type="text" placeholder="client-id" required/>
 
-        <label for="clientCred">Client Credential</label>
+		<label for="clientCred">Client Credential (required when client authentication is enabled)</label>
         <input id="clientCred" th:value="*{clientCred}"
-               name="clientCred" type="text" placeholder="client-cred" required/>
+               name="clientCred" type="text" placeholder="client-cred"/>
 
 		<label for="scope">Scope (optional, space separated)</label>
 		<input id="scope" name="scope" type="text" th:value="*{scope}"/>
 
-        <label for="extraParam1">Additional OAuth request param1 (syntax: name=value)</label>
+		<label for="extraParam1">Additional authorization request parameter (syntax: name=value)</label>
         <input id="extraParam1" name="extraParam1" type="text" th:value="*{extraParam1}"/>
 
 		<div class="checkbox">
 			<input id="usePkce" name="usePkce" type="checkbox" th:checked="*{usePkce}"/>
-			<label for="usePkce" style="margin:0">Use PKCE (S256)</label>
+			<label for="usePkce" style="margin:0">Use PKCE (S256, Authorization Code flow only)</label>
 		</div>
 
         <div class="checkbox">
@@ -79,11 +92,12 @@
 			<div class="checkbox">
 				<input id="sendDpopJkt" name="sendDpopJkt" type="checkbox" th:checked="*{sendDpopJkt}"/>
 				<label for="sendDpopJkt" style="margin:0">Send <code>dpop_jkt</code> in the authorization
-					request (binds the code to the key)</label>
+					request (Authorization Code flow only; binds the code to the key)</label>
 			</div>
 		</div>
 
-		<button type="submit">Authenticate</button>
+		<button id="authorizationCodeButton" type="submit" th:formaction="@{/start}">Run Authorization Code flow</button>
+		<button id="deviceFlowButton" type="submit" th:formaction="@{/device/start}">Run Device flow</button>
 	</form>
 </div>
 <script>
@@ -93,6 +107,26 @@
 		function refresh() { options.style.display = useDpop.checked ? 'block' : 'none'; }
 		useDpop.addEventListener('change', refresh);
 		refresh();
+
+		var authorizationEndpoint = document.getElementById('authorizationEndpoint');
+		var deviceEndpoint = document.getElementById('deviceAuthorizationEndpoint');
+		var pollingInterval = document.getElementById('devicePollingIntervalSeconds');
+		var clientCredential = document.getElementById('clientCred');
+		var useAuthn = document.getElementById('useAuthn');
+		function prepareFlow(deviceFlow) {
+			authorizationEndpoint.required = !deviceFlow;
+			deviceEndpoint.required = deviceFlow;
+			pollingInterval.required = deviceFlow;
+		}
+		function refreshCredential() { clientCredential.required = useAuthn.checked; }
+		document.getElementById('authorizationCodeButton').addEventListener('click', function () {
+			prepareFlow(false);
+		});
+		document.getElementById('deviceFlowButton').addEventListener('click', function () {
+			prepareFlow(true);
+		});
+		useAuthn.addEventListener('change', refreshCredential);
+		refreshCredential();
 	})();
 </script>
 </body>

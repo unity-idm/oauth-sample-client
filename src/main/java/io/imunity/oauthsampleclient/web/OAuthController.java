@@ -2,8 +2,12 @@ package io.imunity.oauthsampleclient.web;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.util.StringUtils;
@@ -17,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectWriter;
 import com.nimbusds.jwt.JWT;
 import com.nimbusds.jwt.SignedJWT;
 import com.nimbusds.oauth2.sdk.AccessTokenResponse;
+import com.nimbusds.oauth2.sdk.AuthorizationGrant;
 import com.nimbusds.oauth2.sdk.AuthorizationCode;
 import com.nimbusds.oauth2.sdk.AuthorizationCodeGrant;
 import com.nimbusds.oauth2.sdk.AuthorizationRequest;
@@ -25,6 +30,11 @@ import com.nimbusds.oauth2.sdk.Scope;
 import com.nimbusds.oauth2.sdk.TokenResponse;
 import com.nimbusds.oauth2.sdk.auth.ClientSecretBasic;
 import com.nimbusds.oauth2.sdk.auth.Secret;
+import com.nimbusds.oauth2.sdk.device.DeviceAuthorizationRequest;
+import com.nimbusds.oauth2.sdk.device.DeviceAuthorizationResponse;
+import com.nimbusds.oauth2.sdk.device.DeviceAuthorizationSuccessResponse;
+import com.nimbusds.oauth2.sdk.device.DeviceCode;
+import com.nimbusds.oauth2.sdk.device.DeviceCodeGrant;
 import com.nimbusds.oauth2.sdk.http.HTTPRequest;
 import com.nimbusds.oauth2.sdk.http.HTTPResponse;
 import com.nimbusds.oauth2.sdk.id.ClientID;
@@ -37,6 +47,7 @@ import com.nimbusds.oauth2.sdk.token.BearerAccessToken;
 import com.nimbusds.oauth2.sdk.token.DPoPAccessToken;
 import com.nimbusds.oauth2.sdk.token.Tokens;
 import com.nimbusds.openid.connect.sdk.OIDCTokenResponse;
+import com.nimbusds.openid.connect.sdk.Nonce;
 import com.nimbusds.openid.connect.sdk.UserInfoRequest;
 
 import ch.qos.logback.classic.Logger;
@@ -55,12 +66,23 @@ public class OAuthController
 	private static final ObjectMapper JSON = new ObjectMapper();
 	private static final ObjectWriter PRETTY = JSON.writerWithDefaultPrettyPrinter();
 	public static final String SESSION_STATE = "oauth_state";
+	static final String DEVICE_SESSION_STATE = "device_oauth_state";
+	private static final long MIN_POLLING_INTERVAL_SECONDS = 1;
+	private static final long MAX_POLLING_INTERVAL_SECONDS = 3600;
 
 	private final ClientDefaults defaults;
+	private final Clock clock;
 
+	@Autowired
 	OAuthController(ClientDefaults defaults)
 	{
+		this(defaults, Clock.systemUTC());
+	}
+
+	OAuthController(ClientDefaults defaults, Clock clock)
+	{
 		this.defaults = defaults;
+		this.clock = clock;
 	}
 
 	@GetMapping("/")
@@ -123,15 +145,196 @@ public class OAuthController
 			// RFC 9449 sec. 10: bind the authorization code to the DPoP key already at the authz request
 			builder.dPoPJWKThumbprintConfirmation(dpopSigner.thumbprintConfirmation());
 		}
-		if (StringUtils.hasText(form.getExtraParam1()))
-		{
-			String[] params = form.getExtraParam1().split("=");
-			builder.customParameter(params[0], params[1]);
-		}
+		ExtraParameter extraParameter = parseExtraParameter(form.getExtraParam1());
+		if (extraParameter != null)
+			builder.customParameter(extraParameter.name(), extraParameter.value());
 
 		AuthorizationRequest authRequest = builder.endpointURI(authzEndpoint).build();
 		String redirect = authRequest.toURI().toString();
 		return "redirect:" + redirect;
+	}
+
+	@PostMapping("/device/start")
+	public String startDeviceAuth(@ModelAttribute("form") OAuthForm form, HttpSession session, Model model)
+	{
+		session.removeAttribute(DEVICE_SESSION_STATE);
+		if (!StringUtils.hasText(form.getDeviceAuthorizationEndpoint()))
+			return renderDeviceStartError(model, "The device authorization endpoint URL is required.");
+		if (form.getDevicePollingIntervalSeconds() < MIN_POLLING_INTERVAL_SECONDS
+				|| form.getDevicePollingIntervalSeconds() > MAX_POLLING_INTERVAL_SECONDS)
+		{
+			return renderDeviceStartError(model, "The polling interval must be between "
+					+ MIN_POLLING_INTERVAL_SECONDS + " and " + MAX_POLLING_INTERVAL_SECONDS + " seconds.");
+		}
+
+		DPoPProofSigner dpopSigner;
+		try
+		{
+			dpopSigner = form.isUseDpop() ? DPoPProofSigner.withFreshKey(form.getDpopKeyType()) : null;
+		} catch (Exception e)
+		{
+			log.error("Error generating the DPoP key", e);
+			return renderDeviceStartError(model, "Error generating the DPoP key: " + e.getMessage());
+		}
+
+		try
+		{
+			URI deviceAuthorizationEndpoint = new URI(form.getDeviceAuthorizationEndpoint());
+			DeviceAuthorizationRequest.Builder builder = form.isUseAuthn()
+					? new DeviceAuthorizationRequest.Builder(new ClientSecretBasic(
+							new ClientID(form.getClientId()), new Secret(form.getClientCred())))
+					: new DeviceAuthorizationRequest.Builder(new ClientID(form.getClientId()));
+			builder.endpointURI(deviceAuthorizationEndpoint);
+			if (StringUtils.hasText(form.getScope()))
+				builder.scope(Scope.parse(form.getScope()));
+			ExtraParameter extraParameter = parseExtraParameter(form.getExtraParam1());
+			if (extraParameter != null)
+				builder.customParameter(extraParameter.name(), extraParameter.value());
+			HTTPResponse httpResponse = prepare(builder.build().toHTTPRequest()).send();
+			String rawResponse = formatRawResponse(httpResponse);
+			model.addAttribute("deviceRawResponse", rawResponse);
+
+			DeviceAuthorizationResponse response = DeviceAuthorizationResponse.parse(httpResponse);
+			if (!response.indicatesSuccess())
+			{
+				model.addAttribute("deviceError",
+						PRETTY.writeValueAsString(response.toErrorResponse().toJSONObject()));
+				return "device";
+			}
+
+			DeviceAuthorizationSuccessResponse success = response.toSuccessResponse();
+			long effectiveInterval = Math.max(form.getDevicePollingIntervalSeconds(), success.getInterval());
+			Instant now = clock.instant();
+			OAuthState oauthState = oauthStateFor(form, dpopSigner);
+			DeviceOAuthState deviceState = new DeviceOAuthState(
+					oauthState,
+					success.getDeviceCode().getValue(),
+					success.getUserCode().getValue(),
+					success.getVerificationURI().toString(),
+					success.getVerificationURIComplete() != null
+							? success.getVerificationURIComplete().toString() : null,
+					success.getLifetime(),
+					form.getDevicePollingIntervalSeconds(),
+					success.getInterval(),
+					effectiveInterval,
+					now.plusSeconds(success.getLifetime()),
+					now.plusSeconds(effectiveInterval),
+					rawResponse,
+					null,
+					null,
+					false);
+			session.setAttribute(DEVICE_SESSION_STATE, deviceState);
+			populateDeviceModel(model, deviceState, effectiveInterval);
+			return "device";
+		} catch (Exception e)
+		{
+			log.error("Error sending device authorization request", e);
+			return renderDeviceStartError(model, "Error sending device authorization request: " + e.getMessage());
+		}
+	}
+
+	@PostMapping("/device/poll")
+	public String pollDeviceToken(HttpSession session, Model model)
+	{
+		DeviceOAuthState deviceState = (DeviceOAuthState) session.getAttribute(DEVICE_SESSION_STATE);
+		if (deviceState == null)
+		{
+			model.addAttribute("rawResponse", "No device authorization is in progress in this session - start over.");
+			return "result";
+		}
+
+		Instant now = clock.instant();
+		if (!now.isBefore(deviceState.expiresAt()))
+		{
+			session.removeAttribute(DEVICE_SESSION_STATE);
+			model.addAttribute("rawResponse", "The device code expired before authorization completed.");
+			model.addAttribute("oauthError", "{\"error\":\"expired_token\"}");
+			return "result";
+		}
+		if (now.isBefore(deviceState.nextPollAt()))
+		{
+			long delay = secondsUntil(now, deviceState.nextPollAt());
+			model.addAttribute("pollStatus", "The next token request is rate-limited; waiting before polling.");
+			populateDeviceModel(model, deviceState, delay);
+			return "device";
+		}
+
+		OAuthState oauthState = deviceState.oauthState();
+		DPoPProofSigner dpopSigner;
+		DPoPSummary dpopSummary;
+		try
+		{
+			dpopSigner = signerFrom(oauthState);
+			dpopSummary = describeKey(dpopSigner, oauthState.sendDpopJkt);
+			model.addAttribute("dpop", dpopSummary);
+		} catch (Exception e)
+		{
+			session.removeAttribute(DEVICE_SESSION_STATE);
+			model.addAttribute("rawResponse", "Error restoring the DPoP key: " + e.getMessage());
+			return "result";
+		}
+
+		URI tokenEndpoint;
+		DPoPRequestSender.Outcome tokenOutcome;
+		try
+		{
+			tokenEndpoint = new URI(oauthState.tokenEndpoint);
+			DeviceCodeGrant grant = new DeviceCodeGrant(new DeviceCode(deviceState.deviceCode()));
+			com.nimbusds.oauth2.sdk.TokenRequest tokenRequest = buildTokenRequest(oauthState, tokenEndpoint, grant);
+			Nonce priorNonce = StringUtils.hasText(deviceState.tokenEndpointNonce())
+					? new Nonce(deviceState.tokenEndpointNonce()) : null;
+			tokenOutcome = DPoPRequestSender.send(() -> prepare(tokenRequest.toHTTPRequest()), dpopSigner,
+					"POST", tokenEndpoint, null, priorNonce);
+		} catch (Exception e)
+		{
+			log.error("Error sending device token request", e);
+			session.removeAttribute(DEVICE_SESSION_STATE);
+			model.addAttribute("rawResponse", "Error sending token request: " + e.getMessage());
+			return "result";
+		}
+
+		String nextNonce = tokenOutcome.serverNonce() != null ? tokenOutcome.serverNonce().getValue()
+				: deviceState.tokenEndpointNonce();
+		boolean nonceChallenged = deviceState.tokenEndpointNonceChallenged() || tokenOutcome.nonceChallenged();
+		TokenResponse tokenResponse;
+		try
+		{
+			tokenResponse = parseTokenResponse(tokenOutcome.response());
+		} catch (Exception e)
+		{
+			session.removeAttribute(DEVICE_SESSION_STATE);
+			applyTokenOutcomeSummary(dpopSummary, tokenOutcome, nonceChallenged);
+			renderTokenResponse(oauthState, dpopSigner, dpopSummary, tokenOutcome.response(), model);
+			model.addAttribute("oauthError", "Unable to parse token response: " + e.getMessage());
+			return "result";
+		}
+
+		if (!tokenResponse.indicatesSuccess())
+		{
+			String errorCode = tokenResponse.toErrorResponse().getErrorObject().getCode();
+			if ("authorization_pending".equals(errorCode) || "slow_down".equals(errorCode))
+			{
+				long nextInterval = deviceState.pollingIntervalSeconds();
+				String status = "Authorization is still pending.";
+				if ("slow_down".equals(errorCode))
+				{
+					nextInterval = Math.min(MAX_POLLING_INTERVAL_SECONDS, nextInterval + 5);
+					status = "The authorization server asked the client to slow down; the polling interval was increased.";
+				}
+				DeviceOAuthState nextState = deviceState.afterPoll(nextInterval,
+						now.plusSeconds(nextInterval), formatRawResponse(tokenOutcome.response()), nextNonce,
+						nonceChallenged);
+				session.setAttribute(DEVICE_SESSION_STATE, nextState);
+				model.addAttribute("pollStatus", status);
+				populateDeviceModel(model, nextState, nextInterval);
+				return "device";
+			}
+		}
+
+		session.removeAttribute(DEVICE_SESSION_STATE);
+		applyTokenOutcomeSummary(dpopSummary, tokenOutcome, nonceChallenged);
+		renderTokenResponse(oauthState, dpopSigner, dpopSummary, tokenOutcome.response(), model);
+		return "result";
 	}
 
 	@GetMapping("/callback")
@@ -192,18 +395,20 @@ public class OAuthController
 			model.addAttribute("rawResponse", "Error sending token request: " + e.getMessage());
 			return "result";
 		}
-		dpopSummary.setTokenEndpointNonceChallenged(tokenOutcome.nonceChallenged());
-		dpopSummary.setTokenEndpointNonce(valueOrNull(tokenOutcome.nonceUsed()));
-		dpopSummary.setTokenEndpointProof(describeProof(tokenOutcome.proof()));
+		applyTokenOutcomeSummary(dpopSummary, tokenOutcome, tokenOutcome.nonceChallenged());
+		renderTokenResponse(oauthState, dpopSigner, dpopSummary, tokenOutcome.response(), model);
+		return "result";
+	}
 
-		HTTPResponse httpResponse = tokenOutcome.response();
-		String body = httpResponse.getBody();
-		model.addAttribute("rawResponse", "HTTP " + httpResponse.getStatusCode() + "\n\n" + body);
+	private void renderTokenResponse(OAuthState oauthState, DPoPProofSigner dpopSigner, DPoPSummary dpopSummary,
+			HTTPResponse httpResponse, Model model)
+	{
+		model.addAttribute("rawResponse", formatRawResponse(httpResponse));
 
 		Tokens tokens = null;
 		try
 		{
-			TokenResponse tr = OIDCTokenResponse.parse(httpResponse);
+			TokenResponse tr = parseTokenResponse(httpResponse);
 			if (tr.indicatesSuccess())
 			{
 				AccessTokenResponse successResponse = tr.toSuccessResponse();
@@ -252,8 +457,94 @@ public class OAuthController
 		{
 			retrieveUserInfo(oauthState, tokens.getAccessToken(), dpopSigner, dpopSummary, model);
 		}
+	}
 
-		return "result";
+	private OAuthState oauthStateFor(OAuthForm form, DPoPProofSigner dpopSigner)
+	{
+		return new OAuthState(
+				null,
+				null,
+				form.getTokenEndpoint(),
+				form.getUserInfoEndpoint(),
+				form.getClientId(),
+				form.getClientCred(),
+				false,
+				form.isUseAuthn(),
+				dpopSigner != null ? dpopSigner.keyType() : null,
+				dpopSigner != null ? dpopSigner.keyPairJson() : null,
+				false);
+	}
+
+	private DPoPProofSigner signerFrom(OAuthState oauthState) throws Exception
+	{
+		return oauthState.dpopKeyType != null
+				? DPoPProofSigner.withStoredKey(oauthState.dpopKeyType, oauthState.dpopKeyJson)
+				: null;
+	}
+
+	private void populateDeviceModel(Model model, DeviceOAuthState state, long pollDelaySeconds)
+	{
+		model.addAttribute("deviceAuthorizationSuccessful", true);
+		model.addAttribute("userCode", state.userCode());
+		model.addAttribute("verificationUri", state.verificationUri());
+		model.addAttribute("verificationUriComplete", state.verificationUriComplete());
+		model.addAttribute("deviceLifetimeSeconds", state.lifetimeSeconds());
+		model.addAttribute("deviceExpiresInSeconds",
+				Math.max(0, Duration.between(clock.instant(), state.expiresAt()).toSeconds()));
+		model.addAttribute("configuredPollingIntervalSeconds", state.configuredPollingIntervalSeconds());
+		model.addAttribute("serverPollingIntervalSeconds", state.serverPollingIntervalSeconds());
+		model.addAttribute("pollingIntervalSeconds", state.pollingIntervalSeconds());
+		model.addAttribute("pollDelaySeconds", Math.max(MIN_POLLING_INTERVAL_SECONDS, pollDelaySeconds));
+		model.addAttribute("deviceRawResponse", state.deviceRawResponse());
+		model.addAttribute("lastPollResponse", state.lastPollResponse());
+	}
+
+	private String renderDeviceStartError(Model model, String message)
+	{
+		model.addAttribute("deviceError", message);
+		return "device";
+	}
+
+	private void applyTokenOutcomeSummary(DPoPSummary summary, DPoPRequestSender.Outcome outcome,
+			boolean nonceChallenged)
+	{
+		summary.setTokenEndpointNonceChallenged(nonceChallenged);
+		summary.setTokenEndpointNonce(valueOrNull(outcome.nonceUsed()));
+		try
+		{
+			summary.setTokenEndpointProof(describeProof(outcome.proof()));
+		} catch (Exception e)
+		{
+			log.error("Error rendering the DPoP proof", e);
+		}
+	}
+
+	private static long secondsUntil(Instant from, Instant until)
+	{
+		long millis = Math.max(0, Duration.between(from, until).toMillis());
+		return Math.max(MIN_POLLING_INTERVAL_SECONDS, (millis + 999) / 1000);
+	}
+
+	private static String formatRawResponse(HTTPResponse response)
+	{
+		return "HTTP " + response.getStatusCode() + "\n\n" + response.getBody();
+	}
+
+	private static TokenResponse parseTokenResponse(HTTPResponse response) throws Exception
+	{
+		return response.getStatusCode() >= 200 && response.getStatusCode() < 300
+				? OIDCTokenResponse.parse(response)
+				: TokenResponse.parse(response);
+	}
+
+	private static ExtraParameter parseExtraParameter(String value)
+	{
+		if (!StringUtils.hasText(value))
+			return null;
+		int separator = value.indexOf('=');
+		if (separator <= 0)
+			throw new IllegalArgumentException("Additional OAuth parameter must use the syntax name=value");
+		return new ExtraParameter(value.substring(0, separator), value.substring(separator + 1));
 	}
 
 	private void retrieveUserInfo(OAuthState oauthState, AccessToken accessToken, DPoPProofSigner dpopSigner,
@@ -293,7 +584,7 @@ public class OAuthController
 	}
 
 	private com.nimbusds.oauth2.sdk.TokenRequest buildTokenRequest(OAuthState oauthState, URI tokenEndpoint,
-			AuthorizationCodeGrant grant)
+			AuthorizationGrant grant)
 	{
 		if (oauthState.useAuthn)
 		{
@@ -462,10 +753,42 @@ public class OAuthController
 	{
 	}
 
+	private record DeviceOAuthState(
+			OAuthState oauthState,
+			String deviceCode,
+			String userCode,
+			String verificationUri,
+			String verificationUriComplete,
+			long lifetimeSeconds,
+			long configuredPollingIntervalSeconds,
+			long serverPollingIntervalSeconds,
+			long pollingIntervalSeconds,
+			Instant expiresAt,
+			Instant nextPollAt,
+			String deviceRawResponse,
+			String lastPollResponse,
+			String tokenEndpointNonce,
+			boolean tokenEndpointNonceChallenged)
+	{
+		DeviceOAuthState afterPoll(long newPollingIntervalSeconds, Instant newNextPollAt,
+				String newLastPollResponse, String newTokenEndpointNonce, boolean newNonceChallenged)
+		{
+			return new DeviceOAuthState(oauthState, deviceCode, userCode, verificationUri,
+					verificationUriComplete, lifetimeSeconds, configuredPollingIntervalSeconds,
+					serverPollingIntervalSeconds, newPollingIntervalSeconds, expiresAt, newNextPollAt,
+					deviceRawResponse, newLastPollResponse, newTokenEndpointNonce, newNonceChallenged);
+		}
+	}
+
+	private record ExtraParameter(String name, String value)
+	{
+	}
+
 
 	public static class OAuthForm
 	{
 		private String authorizationEndpoint;
+		private String deviceAuthorizationEndpoint;
 		private String tokenEndpoint;
 		private String userInfoEndpoint;
 		private String clientId;
@@ -477,11 +800,13 @@ public class OAuthController
 		private boolean sendDpopJkt;
 		private String scope;
 		private String extraParam1;
+		private long devicePollingIntervalSeconds = 5;
 
 		static OAuthForm withDefaults(ClientDefaults defaults)
 		{
 			OAuthForm form = new OAuthForm();
 			form.setAuthorizationEndpoint(defaults.getAuthorizationEndpoint());
+			form.setDeviceAuthorizationEndpoint(defaults.getDeviceAuthorizationEndpoint());
 			form.setTokenEndpoint(defaults.getTokenEndpoint());
 			form.setUserInfoEndpoint(defaults.getUserInfoEndpoint());
 			form.setClientId(defaults.getClientId());
@@ -493,6 +818,7 @@ public class OAuthController
 			form.setUseDpop(defaults.isUseDpop());
 			form.setDpopKeyType(defaults.getDpopKeyType());
 			form.setSendDpopJkt(defaults.isSendDpopJkt());
+			form.setDevicePollingIntervalSeconds(defaults.getDevicePollingIntervalSeconds());
 			return form;
 		}
 
@@ -504,6 +830,16 @@ public class OAuthController
 		public void setAuthorizationEndpoint(String authorizationEndpoint)
 		{
 			this.authorizationEndpoint = authorizationEndpoint;
+		}
+
+		public String getDeviceAuthorizationEndpoint()
+		{
+			return deviceAuthorizationEndpoint;
+		}
+
+		public void setDeviceAuthorizationEndpoint(String deviceAuthorizationEndpoint)
+		{
+			this.deviceAuthorizationEndpoint = deviceAuthorizationEndpoint;
 		}
 
 		public String getTokenEndpoint()
@@ -614,6 +950,16 @@ public class OAuthController
 		public void setSendDpopJkt(boolean sendDpopJkt)
 		{
 			this.sendDpopJkt = sendDpopJkt;
+		}
+
+		public long getDevicePollingIntervalSeconds()
+		{
+			return devicePollingIntervalSeconds;
+		}
+
+		public void setDevicePollingIntervalSeconds(long devicePollingIntervalSeconds)
+		{
+			this.devicePollingIntervalSeconds = devicePollingIntervalSeconds;
 		}
 	}
 }
