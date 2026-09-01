@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.util.StringUtils;
+import org.springframework.web.bind.ServletRequestDataBinder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -85,10 +86,23 @@ public class OAuthController
 		this.clock = clock;
 	}
 
+	/**
+	 * Query parameters of the start screen URL override the configured defaults, field by field, so that a
+	 * filled in form can be shared as a link or bookmarked. A parameter which is absent leaves the default
+	 * in place, and one which can not be converted (a stale enum constant, a non numeric interval) is
+	 * ignored rather than rejected - a mangled link still opens a usable form.
+	 * <p>
+	 * The binding is deliberately local to this method instead of a {@code @ModelAttribute} factory: such a
+	 * factory would also pre-fill the form bound in the POST handlers, where an unchecked checkbox is simply
+	 * absent from the request, and clearing an option enabled by default would stop taking effect.
+	 */
 	@GetMapping("/")
 	public String index(HttpServletRequest request, Model model)
 	{
-		model.addAttribute("form", OAuthForm.withDefaults(defaults));
+		OAuthForm form = OAuthForm.withDefaults(defaults);
+		// bind() records conversion failures in its own BindingResult; only validate()/close() would throw
+		new ServletRequestDataBinder(form, "form").bind(request);
+		model.addAttribute("form", form);
 		model.addAttribute("redirectUri", computeRedirectUri(request));
 		model.addAttribute("dpopKeyTypes", DPoPKeyType.values());
 		return "index";

@@ -15,11 +15,24 @@
 		.muted { color: #666; font-size: .9rem; }
 		.checkbox { display:flex; align-items:center; gap:.5rem; margin-top: 1rem; }
 		.options { margin-left: 1.5rem; padding-left: 1rem; border-left: 3px solid #ddd; }
+		.header { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:1rem; }
+		.header h1 { margin: 0; }
+		.share { text-align: right; }
+		.share button { margin-top: 0; padding: .3rem .6rem; margin-left: .5rem; }
+		.share .muted { margin: .3rem 0 0; }
 	</style>
 </head>
 <body>
 <div class="container">
-	<h1>OAuth Sample Client</h1>
+	<div class="header">
+		<h1>OAuth Sample Client</h1>
+		<div class="share">
+			<a id="shareLink" href="">Shareable link</a>
+			<button id="copyLinkButton" type="button">Copy</button>
+			<p id="shareCredWarning" class="muted" hidden>Carries the client credential - share it as you
+				would the credential itself.</p>
+		</div>
+	</div>
 	<p class="muted">This simple client performs Authorization Code and Device Authorization flows using Nimbus
 		libs. The redirect URL for Authorization Code flow is:
 		<strong th:text="${redirectUri}"></strong></p>
@@ -127,6 +140,52 @@
 		});
 		useAuthn.addEventListener('change', refreshCredential);
 		refreshCredential();
+
+		var form = document.getElementById('oauthForm');
+		var shareLink = document.getElementById('shareLink');
+		var copyButton = document.getElementById('copyLinkButton');
+		var credWarning = document.getElementById('shareCredWarning');
+
+		// Every field goes into the link, empty ones included, so that it fully pins the configuration: a
+		// parameter left out would fall back to whatever defaults the recipient has configured locally.
+		function currentUrl() {
+			var params = new URLSearchParams();
+			Array.prototype.forEach.call(form.elements, function (element) {
+				if (!element.name || element.type === 'submit')
+					return;
+				params.set(element.name, element.type === 'checkbox'
+						? (element.checked ? 'true' : 'false')
+						: element.value);
+			});
+			return location.origin + location.pathname + '?' + params.toString();
+		}
+		function refreshShareLink() {
+			shareLink.href = currentUrl();
+			credWarning.hidden = clientCredential.value === '';
+			copyButton.textContent = 'Copy';
+		}
+		function selectShareLink() {
+			var range = document.createRange();
+			range.selectNodeContents(shareLink);
+			var selection = window.getSelection();
+			selection.removeAllRanges();
+			selection.addRange(range);
+			copyButton.textContent = 'Press Ctrl+C';
+		}
+		copyButton.addEventListener('click', function () {
+			// Unavailable outside a secure context, e.g. when the app is reached over plain HTTP
+			if (!navigator.clipboard) {
+				selectShareLink();
+				return;
+			}
+			navigator.clipboard.writeText(shareLink.href).then(function () {
+				copyButton.textContent = 'Copied!';
+				setTimeout(function () { copyButton.textContent = 'Copy'; }, 1500);
+			}, selectShareLink);
+		});
+		form.addEventListener('input', refreshShareLink);
+		form.addEventListener('change', refreshShareLink);
+		refreshShareLink();
 	})();
 </script>
 </body>
