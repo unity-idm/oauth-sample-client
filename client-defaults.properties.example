@@ -17,7 +17,7 @@
 oauth.client.defaults.authorization-endpoint=https://localhost:2443/oauth2-as/oauth2-authz
 
 # Required only when running Device flow
-oauth.client.defaults.device-authorization-endpoint=
+oauth.client.defaults.device-authorization-endpoint=https://localhost:2443/oauth2/device_authorization
 
 oauth.client.defaults.token-endpoint=https://localhost:2443/oauth2/token
 
